@@ -196,6 +196,11 @@ summary { cursor: pointer; font-size: 13px; color: #2d5a8c; font-weight: 600; }
     </div>
   </div>
 
+  <div class="actions" style="margin-top:14px">
+    <button class="btn-secondary" id="testBtn" type="button">测试连接</button>
+    <span class="muted">可选。只是探一下连通性，不影响下面的「开始检测」——不测也能直接跑</span>
+  </div>
+
   <div id="configMsg"></div>
 </section>
 
@@ -274,9 +279,67 @@ function updateStats() {
   $("truthStat").textContent = t === 0 ? "" : t > 0 ? `已载入 ${t} 条` : "JSON 格式有误";
 }
 
+/** 每条回复必须齐备的四个字段，与后端 BatchRequestParser 的规则一致。 */
+const REQUIRED_FIELDS = ["id", "user_question", "system_reply", "knowledge_base"];
+
+/**
+ * 逐条检查回复数据。
+ *
+ * 与后端同一套规则，只是为了让用户提交前就看到问题。**后端才是权威校验方**——
+ * 任何人都能绕过页面直接调接口。
+ *
+ * 每个对象的问题合并成一条，而不是查到就报——否则用户得反复提交逐个试错。
+ */
+function findReplyProblems(items) {
+  const problems = [];
+  items.forEach((item, i) => {
+    const at = `第 ${i + 1} 条`;
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      problems.push(`${at} 不是对象。每条回复必须是 {...} 包裹的对象。`);
+      return;
+    }
+    const missing = [], wrongType = [];
+    for (const field of REQUIRED_FIELDS) {
+      const value = item[field];
+      if (value === undefined || value === null) {
+        missing.push(field);
+      } else if (typeof value !== "string") {
+        wrongType.push(field);
+      } else if (!value.trim()) {
+        missing.push(field + "（空字符串）");
+      }
+    }
+    if (missing.length || wrongType.length) {
+      const parts = [];
+      if (missing.length) parts.push("缺少 " + missing.join("、"));
+      if (wrongType.length) parts.push("这些字段必须是字符串：" + wrongType.join("、"));
+      problems.push(`${at}：${parts.join("；")}。`);
+    }
+  });
+  return problems;
+}
+
+/** 只收集模型接口部分，供「测试连接」使用。 */
+function collectConnection() {
+  const errors = [];
+  const baseUrl = $("baseUrl").value.trim();
+  const model = $("model").value.trim();
+  const apiKey = $("apiKey").value.trim();
+
+  if (!baseUrl) errors.push("Base URL 不能为空。");
+  if (!model) errors.push("模型名不能为空。");
+  if (!apiKey && !/localhost|127\.0\.0\.1/.test(baseUrl)) {
+    errors.push("API key 不能为空（连本地模型时可留空，但 Base URL 要指向 localhost）。");
+  }
+
+  return {errors, body: {base_url: baseUrl, api_key: apiKey, model: model}};
+}
+
 /** 本地先拦一道，只为让用户早点看到问题；后端才是权威校验方。 */
 function collectRequest() {
-  const errors = [];
+  const connection = collectConnection();
+  const errors = [...connection.errors];
+
   const repliesText = $("repliesInput").value.trim();
   let replies = [];
   if (!repliesText) {
@@ -284,9 +347,21 @@ function collectRequest() {
   } else {
     try {
       const parsed = JSON.parse(repliesText);
-      if (!Array.isArray(parsed)) errors.push("回复数据的顶层必须是数组。");
-      else if (parsed.length === 0) errors.push("回复数据是空数组。");
-      else replies = parsed;
+      if (!Array.isArray(parsed)) {
+        errors.push("回复数据的顶层必须是数组。");
+      } else if (parsed.length === 0) {
+        errors.push("回复数据是空数组。");
+      } else {
+        replies = parsed;
+        const problems = findReplyProblems(parsed);
+        if (problems.length) {
+          // 数据多的时候问题可能上百条，先展示一批——改完再校验会更快
+          errors.push(...problems.slice(0, 10));
+          if (problems.length > 10) {
+            errors.push(`……还有 ${problems.length - 10} 条数据有同样的问题，先修这几条。`);
+          }
+        }
+      }
     } catch (e) { errors.push("回复数据不是合法 JSON：" + e.message); }
   }
 
@@ -300,19 +375,33 @@ function collectRequest() {
     } catch (e) { errors.push("人工标注不是合法 JSON：" + e.message); }
   }
 
-  const baseUrl = $("baseUrl").value.trim();
-  const model = $("model").value.trim();
-  const apiKey = $("apiKey").value.trim();
-  if (!baseUrl) errors.push("Base URL 不能为空。");
-  if (!model) errors.push("模型名不能为空。");
-  if (!apiKey && !/localhost|127\.0\.0\.1/.test(baseUrl)) {
-    errors.push("API key 不能为空（连本地模型时可留空，但 Base URL 要指向 localhost）。");
-  }
-
   return {errors, body: {
-    base_url: baseUrl, api_key: apiKey, model: model,
-    replies: replies, ground_truth: groundTruth,
+    base_url: connection.body.base_url,
+    api_key: connection.body.api_key,
+    model: connection.body.model,
+    replies: replies,
+    ground_truth: groundTruth,
   }};
+}
+
+// ---------------------------------------------------------------------------
+// 进度条
+//
+// 后端一次请求跑完整批检测，前端拿不到逐条进度，所以用不确定态滑动动画，
+// 如实表达"在跑，但不知道跑到哪了"。
+//
+// 这里踩过一个坑：重置进度条时只改了行内 width，忘了摘掉 indeterminate 类，
+// 而那个类的样式带 !important —— 行内样式被压过，失败之后进度条会一直滑下去。
+// 所以收尾一律走下面两个函数，保证"类"和"宽度"一起变。
+// ---------------------------------------------------------------------------
+
+function progressRunning() {
+  $("progressFill").parentElement.classList.add("indeterminate");
+}
+
+function progressDone(percent) {
+  $("progressFill").parentElement.classList.remove("indeterminate");
+  $("progressFill").style.width = percent + "%";
 }
 
 // ===========================================================================
@@ -332,7 +421,7 @@ async function runDetection() {
   const btn = $("runBtn");
   btn.disabled = true;
   btn.textContent = "检测中…";
-  $("progressFill").parentElement.classList.add("indeterminate");
+  progressRunning();
   $("runStat").textContent = `共 ${body.replies.length} 条，逐条调用模型，需要一些时间`;
   $("reportSection").classList.add("hidden");
 
@@ -347,11 +436,13 @@ async function runDetection() {
     try { payload = await response.json(); } catch (_) { /* 非 JSON 响应 */ }
 
     if (!response.ok) {
-      renderFailure(response.status, payload);
+      progressDone(0);
+      $("runStat").textContent = "";
+      renderFailure($("runMsg"), response.status, payload);
       return;
     }
-    $("progressFill").parentElement.classList.remove("indeterminate");
-    $("progressFill").style.width = "100%";
+
+    progressDone(100);
     $("runStat").textContent = `${body.replies.length} 条`;
     if (payload && payload.warnings && payload.warnings.length) {
       setMsg($("runMsg"), "warn", "检测完成，但有 " + payload.warnings.length + " 条提醒", payload.warnings);
@@ -360,8 +451,8 @@ async function runDetection() {
     }
     await renderReport(payload.data, Date.now() - started);
   } catch (e) {
-    $("progressFill").parentElement.classList.remove("indeterminate");
-    $("progressFill").style.width = "0";
+    progressDone(0);
+    $("runStat").textContent = "";
     setMsg($("runMsg"), "error", "请求没能发到本机后端", [
       e.message,
       "确认后端还在运行；如果刚重启过，刷新页面重试。",
@@ -372,18 +463,23 @@ async function runDetection() {
   }
 }
 
-function renderFailure(status, payload) {
-  $("progressFill").style.width = "0";
+/**
+ * 把后端返回的失败信息渲染成能照着做的提示。
+ *
+ * 只负责渲染，不碰进度条——进度归 runDetection 管，
+ * 两处都改就容易漏掉一个（之前就是这么漏的）。
+ */
+function renderFailure(target, status, payload) {
   if (payload && Array.isArray(payload.errors)) {
-    setMsg($("runMsg"), "error", payload.message || "请求参数有问题", payload.errors);
+    setMsg(target, "error", payload.message || "请求参数有问题", payload.errors);
     return;
   }
   if (payload && payload.message) {
-    setMsg($("runMsg"), "error", payload.message,
+    setMsg(target, "error", payload.message,
       [payload.detail, payload.hint].filter(Boolean));
     return;
   }
-  setMsg($("runMsg"), "error", `后端返回 HTTP ${status}`, ["没有可解析的错误信息。"]);
+  setMsg(target, "error", `后端返回 HTTP ${status}`, ["没有可解析的错误信息。"]);
 }
 
 // ===========================================================================
@@ -688,6 +784,61 @@ $("preset").addEventListener("change", e => {
   const [url, model] = e.target.value.split("|");
   $("baseUrl").value = url;
   $("model").value = model;
+});
+
+/**
+ * 探测连通性。
+ *
+ * 走的是后端同一个客户端，所以这里报出来的错就是检测时会遇到的错——
+ * 缺路径前缀、密钥不对、被限流，都会带上对应的排查提示。
+ * 先探一次，免得跑完一批才发现配错。
+ */
+$("testBtn").addEventListener("click", async () => {
+  setMsg($("configMsg"), null);
+
+  const {errors, body} = collectConnection();
+  if (errors.length) {
+    setMsg($("configMsg"), "error", "模型接口配置有问题", errors);
+    return;
+  }
+
+  const btn = $("testBtn");
+  btn.disabled = true;
+  btn.textContent = "测试中…";
+  try {
+    const response = await fetch("/api/llm/ping", {
+      method: "POST",
+      headers: {"Content-Type": "application/json; charset=utf-8"},
+      body: JSON.stringify(body),
+    });
+    let payload = null;
+    try { payload = await response.json(); } catch (_) { /* 非 JSON 响应 */ }
+
+    if (!response.ok) {
+      renderFailure($("configMsg"), response.status, payload);
+      return;
+    }
+
+    const detail = [
+      `模型：${payload.model}`,
+      `实际请求地址：${payload.endpoint}`,
+      `模型回应：${payload.reply}`,
+    ];
+    if (payload.warnings && payload.warnings.length) {
+      setMsg($("configMsg"), "warn", "连接正常，但配置有需要留意的地方",
+        [...detail, ...payload.warnings]);
+    } else {
+      setMsg($("configMsg"), "ok", "连接正常", detail);
+    }
+  } catch (e) {
+    setMsg($("configMsg"), "error", "请求没能发到本机后端", [
+      e.message,
+      "确认后端还在运行。",
+    ]);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "测试连接";
+  }
 });
 
 $("runBtn").addEventListener("click", runDetection);

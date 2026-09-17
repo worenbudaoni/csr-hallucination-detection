@@ -250,26 +250,92 @@ class BatchRequestParserTest {
         assertTrue(parsed.errors().stream().anyMatch(e -> e.contains("system_reply")));
     }
 
+    /** 四个字段一个都不能少。没有知识库就无从核对，这条数据没有检测价值。 */
     @Test
-    void warnsAboutMissingKnowledgeBaseButStillAccepts() {
+    void rejectsRepliesMissingAnyRequiredField() {
+        for (String missing : new String[]{"id", "user_question", "system_reply", "knowledge_base"}) {
+            StringBuilder json = new StringBuilder("{\"base_url\":\"https://x.com/v1\","
+                    + "\"api_key\":\"sk\",\"model\":\"m\",\"replies\":[{");
+            boolean first = true;
+            for (String field : new String[]{"id", "user_question", "system_reply", "knowledge_base"}) {
+                if (field.equals(missing)) {
+                    continue;
+                }
+                if (!first) {
+                    json.append(",");
+                }
+                json.append("\"").append(field).append("\":\"值\"");
+                first = false;
+            }
+            json.append("}]}");
+
+            BatchRequestParser.Parsed parsed = parse(json.toString());
+            assertFalse(parsed.ok(), "缺 " + missing + " 应当被拒");
+            assertTrue(parsed.errors().stream().anyMatch(e -> e.contains(missing)),
+                    "报错里应当指明缺的是 " + missing + "：" + String.join("; ", parsed.errors()));
+        }
+    }
+
+    /**
+     * 同一个对象里缺多个字段时，要一次全报出来。
+     *
+     * <p>早先的实现查到一个问题就 continue，用户得反复提交、逐个试错——
+     * 这条测试就是守住那个坑不再回来。
+     */
+    @Test
+    void reportsEveryMissingFieldOfTheSameObjectAtOnce() {
         BatchRequestParser.Parsed parsed = parse("""
                 {"base_url":"https://x.com/v1","api_key":"sk","model":"m",
-                 "replies":[{"id":"a","system_reply":"答"}]}
+                 "replies":[{"id":"a"}]}
                 """);
 
-        assertTrue(parsed.ok(), String.join("; ", parsed.errors()));
-        assertTrue(parsed.warnings().stream().anyMatch(w -> w.contains("knowledge_base")));
+        assertFalse(parsed.ok());
+        assertEquals(1, parsed.errors().size(),
+                "一个对象的问题应当合并成一条错误，实际：" + String.join(" | ", parsed.errors()));
+
+        String error = parsed.errors().get(0);
+        assertTrue(error.startsWith("replies[0]"), error);
+        assertTrue(error.contains("user_question"), error);
+        assertTrue(error.contains("system_reply"), error);
+        assertTrue(error.contains("knowledge_base"), error);
+        assertFalse(error.contains("缺少必填字段 id"), "id 是有值的，不该被报缺：" + error);
+    }
+
+    /** 字段在但类型不对，等同于不合法——不能读成空串放过去。 */
+    @Test
+    void rejectsFieldsOfTheWrongType() {
+        BatchRequestParser.Parsed parsed = parse("""
+                {"base_url":"https://x.com/v1","api_key":"sk","model":"m",
+                 "replies":[{"id":123,"user_question":"问","system_reply":"答","knowledge_base":"库"}]}
+                """);
+
+        assertFalse(parsed.ok());
+        assertTrue(parsed.errors().stream().anyMatch(e -> e.contains("id") && e.contains("字符串")),
+                String.join("; ", parsed.errors()));
+    }
+
+    /** 空字符串不算填了。 */
+    @Test
+    void rejectsBlankFieldValues() {
+        BatchRequestParser.Parsed parsed = parse("""
+                {"base_url":"https://x.com/v1","api_key":"sk","model":"m",
+                 "replies":[{"id":"a","user_question":"   ","system_reply":"答","knowledge_base":"库"}]}
+                """);
+
+        assertFalse(parsed.ok());
+        assertTrue(parsed.errors().stream().anyMatch(e -> e.contains("user_question")),
+                String.join("; ", parsed.errors()));
     }
 
     @Test
     void warnsAboutDuplicateIds() {
         BatchRequestParser.Parsed parsed = parse("""
                 {"base_url":"https://x.com/v1","api_key":"sk","model":"m",
-                 "replies":[{"id":"a","system_reply":"答1","knowledge_base":"库"},
-                            {"id":"a","system_reply":"答2","knowledge_base":"库"}]}
-                """);
+                 "replies":[%s,
+                            {"id":"a","user_question":"问2","system_reply":"答2","knowledge_base":"库"}]}
+                """.formatted(VALID_REPLY));
 
-        assertTrue(parsed.ok(), "重复 id 不该导致整体被拒");
+        assertTrue(parsed.ok(), "重复 id 不该导致整体被拒：" + String.join("; ", parsed.errors()));
         assertTrue(parsed.warnings().stream().anyMatch(w -> w.contains("重复")));
     }
 
@@ -347,5 +413,65 @@ class BatchRequestParserTest {
     void returnsNullRequestWhenThereAreErrors() {
         assertNull(parse("{}").request());
         assertNotNull(parse(bodyWith("")).request());
+    }
+
+    // ---------------------------------------------------------------------
+    // 只解析连接信息（「测试连接」用）
+    // ---------------------------------------------------------------------
+
+    /** 探测连通性只需要三项，不该因为缺 replies 而被拒。 */
+    @Test
+    void connectionParsingDoesNotRequireReplies() {
+        BatchRequestParser.ParsedConnection parsed = BatchRequestParser.parseConnection(
+                MAPPER.readTree("""
+                        {"base_url":"https://api.deepseek.com/v1","api_key":"sk","model":"deepseek-chat"}
+                        """));
+
+        assertTrue(parsed.ok(), String.join("; ", parsed.errors()));
+        assertEquals("https://api.deepseek.com/v1", parsed.settings().baseUrl());
+        assertEquals("deepseek-chat", parsed.settings().model());
+    }
+
+    /** 连接信息的校验规则与批量检测完全一致——两处各写一套迟早会分叉。 */
+    @Test
+    void connectionParsingAppliesTheSameRules() {
+        assertFalse(BatchRequestParser.parseConnection(MAPPER.readTree("""
+                {"base_url":"https://x.com/v1","model":"m"}
+                """)).ok(), "云端端点缺 key 应当被拒");
+
+        assertTrue(BatchRequestParser.parseConnection(MAPPER.readTree("""
+                {"base_url":"http://localhost:11434/v1","model":"m"}
+                """)).ok(), "本地端点应允许空 key");
+
+        assertFalse(BatchRequestParser.parseConnection(MAPPER.readTree("""
+                {"base_url":"https://x.com/v1","api_key":"sk"}
+                """)).ok(), "缺模型名应当被拒");
+
+        assertFalse(BatchRequestParser.parseConnection(MAPPER.readTree("""
+                {"base_url":"api.deepseek.com/v1","api_key":"sk","model":"m"}
+                """)).ok(), "缺协议前缀应当被拒");
+    }
+
+    @Test
+    void connectionParsingKeepsWarnings() {
+        BatchRequestParser.ParsedConnection parsed = BatchRequestParser.parseConnection(
+                MAPPER.readTree("""
+                        {"base_url":"https://api.openai.com","api_key":"sk","model":"gpt-4o-mini"}
+                        """));
+
+        assertTrue(parsed.ok(), String.join("; ", parsed.errors()));
+        assertTrue(parsed.warnings().stream().anyMatch(w -> w.contains("路径")),
+                "缺版本前缀的警告应当保留下来：" + String.join("; ", parsed.warnings()));
+    }
+
+    /** 连接信息也要规整尾部斜杠，否则探测用的地址会和检测用的不一致。 */
+    @Test
+    void connectionParsingTrimsTrailingSlashes() {
+        BatchRequestParser.ParsedConnection parsed = BatchRequestParser.parseConnection(
+                MAPPER.readTree("""
+                        {"base_url":"https://api.deepseek.com/v1/","api_key":"sk","model":"m"}
+                        """));
+
+        assertEquals("https://api.deepseek.com/v1", parsed.settings().baseUrl());
     }
 }

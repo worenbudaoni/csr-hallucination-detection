@@ -35,7 +35,23 @@ public final class BatchRequestParser {
         }
     }
 
-    public static Parsed parse(JsonNode body) {
+    /** 模型连接信息。检测与连通性探测共用，校验规则也共用。 */
+    public record ConnectionSettings(String baseUrl, String apiKey, String model) {
+    }
+
+    /** 只解析连接信息的结果。 */
+    public record ParsedConnection(ConnectionSettings settings, List<String> errors, List<String> warnings) {
+        public boolean ok() {
+            return settings != null && errors.isEmpty();
+        }
+    }
+
+    /**
+     * 只解析 base_url / api_key / model 三项，不要求带 replies。
+     *
+     * <p>「测试连接」只需要这三项，没必要为了探一次连通性去构造假数据。
+     */
+    public static ParsedConnection parseConnection(JsonNode body) {
         List<String> errors = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
 
@@ -49,6 +65,19 @@ public final class BatchRequestParser {
         }
         validateApiKey(apiKey, baseUrl, errors, warnings);
 
+        if (!errors.isEmpty()) {
+            return new ParsedConnection(null, errors, warnings);
+        }
+        return new ParsedConnection(new ConnectionSettings(
+                trimTrailingSlashes(baseUrl), apiKey == null ? "" : apiKey.trim(), model.trim()),
+                errors, warnings);
+    }
+
+    public static Parsed parse(JsonNode body) {
+        ParsedConnection connection = parseConnection(body);
+        List<String> errors = new ArrayList<>(connection.errors());
+        List<String> warnings = new ArrayList<>(connection.warnings());
+
         List<ReplyRecord> replies = parseReplies(body.path("replies"), errors, warnings);
         List<GroundTruthRecord> groundTruth = parseGroundTruth(
                 firstPresent(body, "ground_truth", "groundTruth"), errors, warnings);
@@ -56,9 +85,10 @@ public final class BatchRequestParser {
         if (!errors.isEmpty()) {
             return new Parsed(null, errors, warnings);
         }
+        ConnectionSettings settings = connection.settings();
         return new Parsed(new BatchDetectionRequest(
-                trimTrailingSlashes(baseUrl), apiKey == null ? "" : apiKey.trim(), model.trim(),
-                replies, groundTruth), errors, warnings);
+                settings.baseUrl(), settings.apiKey(), settings.model(), replies, groundTruth),
+                errors, warnings);
     }
 
     // ---------------------------------------------------------------------
@@ -136,32 +166,106 @@ public final class BatchRequestParser {
             // 下标从 0 起，和 JSON 数组本身对齐——从 1 起会让人对着数组数错位置
             String at = "replies[" + index + "]";
             index++;
-            if (!item.isObject()) {
-                errors.add(at + " 不是对象。");
-                continue;
-            }
-            String id = item.path("id").asString("");
-            String reply = item.path("system_reply").asString("");
-            String kb = item.path("knowledge_base").asString("");
-            String question = item.path("user_question").asString("");
 
-            if (id.isBlank()) {
-                errors.add(at + " 缺少 id。");
+            if (!item.isObject()) {
+                errors.add(at + " 不是对象（当前是" + typeName(item) + "）。每条回复必须是 {...} 包裹的对象。");
                 continue;
             }
+
+            // 四个字段【一次查完】，缺哪些一次列出来。
+            // 不能查到一个问题就 continue —— 那样同一个对象里还缺别的字段就不会被告知，
+            // 用户得反复提交、逐个试错。
+            List<String> missing = new ArrayList<>();
+            List<String> wrongType = new ArrayList<>();
+            String id = requireText(item, "id", missing, wrongType);
+            String question = requireText(item, "user_question", missing, wrongType);
+            String reply = requireText(item, "system_reply", missing, wrongType);
+            String kb = requireText(item, "knowledge_base", missing, wrongType);
+
+            String problem = describeProblems(missing, wrongType);
+            if (problem != null) {
+                errors.add(at + "：" + problem);
+                continue;
+            }
+
             if (!seenIds.add(id)) {
                 warnings.add(at + " 的 id \"" + id + "\" 与前面的重复，报告中会难以区分。");
-            }
-            if (reply.isBlank()) {
-                errors.add(at + "（id=" + id + "）缺少 system_reply，这是要被检测的回复本身。");
-                continue;
-            }
-            if (kb.isBlank()) {
-                warnings.add(at + "（id=" + id + "）的 knowledge_base 为空，该条只能判为「知识库无据」。");
             }
             replies.add(new ReplyRecord(id, question, reply, kb));
         }
         return replies;
+    }
+
+    /**
+     * 检查一个必填的字符串字段，把问题记到对应的清单里。
+     *
+     * <p>不立刻返回也不抛异常——调用方要的是"这个对象一共有几处不合格"，
+     * 而不是"第一处是哪儿"。
+     *
+     * @return 字段值；不合格时返回空串（调用方会因清单非空而跳过这一条）
+     */
+    private static String requireText(JsonNode item, String field,
+                                      List<String> missing, List<String> wrongType) {
+        JsonNode value = item.path(field);
+        if (value.isMissingNode() || value.isNull()) {
+            missing.add(field);
+            return "";
+        }
+        if (!value.isString()) {
+            wrongType.add(field + "（当前是" + typeName(value) + "）");
+            return "";
+        }
+        String text = value.asString();
+        if (text.isBlank()) {
+            missing.add(field + "（空字符串）");
+            return "";
+        }
+        return text;
+    }
+
+    /**
+     * 把一个对象的字段问题拼成一句话。
+     *
+     * <p>缺多个字段时合并成"缺少必填字段 a、b、c"，而不是逐条重复"缺少必填字段"——
+     * 一个对象缺四个字段时，后者读起来是一团噪音。
+     *
+     * @return 描述文本；没有问题则返回 null
+     */
+    private static String describeProblems(List<String> missing, List<String> wrongType) {
+        if (missing.isEmpty() && wrongType.isEmpty()) {
+            return null;
+        }
+        List<String> parts = new ArrayList<>();
+        if (!missing.isEmpty()) {
+            parts.add("缺少必填字段 " + String.join("、", missing));
+        }
+        if (!wrongType.isEmpty()) {
+            parts.add("这些字段必须是字符串：" + String.join("、", wrongType));
+        }
+        return String.join("；", parts) + "。";
+    }
+
+    /** 把节点类型翻译成中文，报错时比 "VALUE_NUMBER" 之类好懂得多。 */
+    private static String typeName(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return "null";
+        }
+        if (node.isArray()) {
+            return "数组";
+        }
+        if (node.isObject()) {
+            return "对象";
+        }
+        if (node.isString()) {
+            return "字符串";
+        }
+        if (node.isNumber()) {
+            return "数字";
+        }
+        if (node.isBoolean()) {
+            return "布尔值";
+        }
+        return node.getNodeType().toString();
     }
 
     private static List<GroundTruthRecord> parseGroundTruth(JsonNode node,
@@ -180,20 +284,31 @@ public final class BatchRequestParser {
         for (JsonNode item : node) {
             String at = "ground_truth[" + index + "]";
             index++;
+
             if (!item.isObject()) {
-                errors.add(at + " 不是对象。");
+                errors.add(at + " 不是对象（当前是" + typeName(item) + "）。每条标注必须是 {...} 包裹的对象。");
                 continue;
             }
-            String id = item.path("id").asString("");
+
+            // 与 replies 一样：必填字段一次查完。
+            // hallucination_type 与 detail 是可选的——判为干净的回复没有类型可言。
+            List<String> missing = new ArrayList<>();
+            List<String> wrongType = new ArrayList<>();
+            String id = requireText(item, "id", missing, wrongType);
+
             JsonNode flag = item.path("is_hallucination");
-            if (id.isBlank()) {
-                errors.add(at + " 缺少 id。");
+            if (flag.isMissingNode() || flag.isNull()) {
+                missing.add("is_hallucination");
+            } else if (!flag.isBoolean()) {
+                wrongType.add("is_hallucination（当前是" + typeName(flag) + "，必须是 true 或 false）");
+            }
+
+            String problem = describeProblems(missing, wrongType);
+            if (problem != null) {
+                errors.add(at + "：" + problem);
                 continue;
             }
-            if (!flag.isBoolean()) {
-                errors.add(at + "（id=" + id + "）的 is_hallucination 必须是 true 或 false。");
-                continue;
-            }
+
             JsonNode typeNode = item.path("hallucination_type");
             truths.add(new GroundTruthRecord(id, flag.asBoolean(),
                     typeNode.isMissingNode() || typeNode.isNull() ? null : typeNode.asString(),
