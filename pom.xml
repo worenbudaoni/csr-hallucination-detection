@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.1</version>
+        <relativePath/> <!-- lookup parent from repository -->
+    </parent>
+    <groupId>com.hallucination</groupId>
+    <artifactId>csr-hallucination-detection</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>csr-hallucination-detection</name>
+    <description>客服回复幻觉检测</description>
+
+    <properties>
+        <java.version>17</java.version>
+        <spring-ai.version>2.0.1</spring-ai.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
+        </dependency>
+
+        <!--
+          只用 Spring AI 的对话模型【接口】（ChatModel / Prompt / ChatResponse）。
+
+          不用 spring-ai-starter-model-openai：那个 starter 面向"在配置文件里定死一家厂商、
+          启动时建好客户端"的用法，而本项目的模型地址与密钥是用户在页面上现填的，
+          每个请求一套凭据。为此 detection/llm/OpenAiCompatibleChatModel 直接说 HTTP 协议，
+          实现 Spring AI 的 ChatModel 接口，换厂商只改 base-url 与 model 两个值。
+          既然没人读 spring.ai.* 配置，那套自动装配就只是负担。
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-model</artifactId>
+        </dependency>
+        <!-- ChatModel 的流式接口返回 Flux，需要 reactor -->
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-core</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!--
+                      测试会打印中文判定结果。Windows 上 Java 17 默认用 GBK 编码标准输出，
+                      控制台是 UTF-8 时会乱码，导致验证过程看不清楚。显式指定为 UTF-8。
+                    -->
+                    <argLine>-Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8</argLine>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>
