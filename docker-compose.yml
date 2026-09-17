@@ -9,19 +9,12 @@ services:
         # 国内构建加速，用法：MAVEN_MIRROR=https://maven.aliyun.com/repository/public docker compose build
         MAVEN_MIRROR: ${MAVEN_MIRROR:-}
     image: csr-hallucination-detection:latest
-    container_name: csr-hallucination-detection
-
+    container_name: detector
+    networks:
+      - detector-net
     ports:
       - "${SERVER_PORT:-8080}:8080"
-
-    # required: false 是刻意的：没有 .env 的人（比如 clone 下来看一眼的评审者）
-    # 也能直接 docker compose up 起来，此时应用回落 mock 模式照常出结果。
-    env_file:
-      - path: .env
-        required: false
-
     restart: unless-stopped
-
     # 用 bash 的 /dev/tcp 做存活探测。基础镜像里没有 curl / wget，
     # 装一个只为健康检查不划算。
     healthcheck:
@@ -30,3 +23,26 @@ services:
       timeout: 5s
       retries: 3
       start_period: 40s
+
+  # ---------- Caddy 反向代理 ----------
+  detector-caddy:
+    image: caddy:latest
+    restart: unless-stopped
+    container_name: detector-caddy
+    ports:
+      - "443:443"
+    volumes:
+      - /opt/cf:/opt/cf:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data          # 存储证书
+    networks:
+      - detector-net
+    depends_on:
+      - detector
+
+networks:
+  detector-net:
+    driver: bridge
+
+volumes:
+  caddy-data:      # 存储证书

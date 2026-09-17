@@ -1,34 +1,23 @@
 # syntax=docker/dockerfile:1
 
 # ============================================================================
-# 阶段一：构建
+# 直接用构建好的 jar，不在镜像里编译
 # ============================================================================
-FROM maven:3.9-eclipse-temurin-17 AS build
+#
+# 构建前必须先在宿主机打包：
+#     mvn package -DskipTests        （或 ./mvnw package -DskipTests）
+#
+# 为什么不在镜像里编译：容器内跑 Maven 每次都要下一遍依赖，构建慢、镜像层大，
+# 而且本地已经用 IDE 或命令行构建过了，再来一遍纯属重复。
+# 代价是构建镜像前不能忘了先 package —— 忘了会看到下面这条报错：
+#     failed to compute cache key: "/target/xxx.jar": not found
+#
+# 对应的 .dockerignore 里用
+#     target/*
+#     !target/*.jar
+# 只放行 jar，其余构建产物（classes、测试报告等）不进构建上下文，
+# 否则每次 docker build 都要把几百 MB 传给守护进程。
 
-WORKDIR /build
-
-# 可选的 Maven 镜像加速。容器里首次构建要从中央仓库拉 Spring AI 全家桶，
-# 直连会比较慢。用法：
-#   docker build --build-arg MAVEN_MIRROR=https://maven.aliyun.com/repository/public .
-ARG MAVEN_MIRROR=""
-
-COPY pom.xml .
-RUN if [ -n "$MAVEN_MIRROR" ]; then \
-      mkdir -p /root/.m2 && \
-      printf '%s' \
-        '<settings><mirrors><mirror><id>mirror</id><name>mirror</name>' \
-        "<url>$MAVEN_MIRROR</url>" \
-        '<mirrorOf>central</mirrorOf></mirror></mirrors></settings>' \
-        > /root/.m2/settings.xml; \
-    fi \
-    && mvn -B -q dependency:go-offline
-
-COPY src ./src
-RUN mvn -B -q clean package -DskipTests
-
-# ============================================================================
-# 阶段二：运行
-# ============================================================================
 FROM eclipse-temurin:17-jre
 
 WORKDIR /app
@@ -36,7 +25,11 @@ WORKDIR /app
 # 不以 root 运行
 RUN groupadd --system app && useradd --system --gid app --create-home app
 
-COPY --from=build /build/target/*.jar /app/app.jar
+# 用 *.jar 而不是写死版本号，pom 改版本时这里不用跟着改。
+# Spring Boot 的 repackage 会在 target 下留一个 xxx.jar.original，
+# 但它不以 .jar 结尾，不会被这个模式匹配到。
+COPY target/*.jar /app/app.jar
+
 RUN chown -R app:app /app
 USER app
 
@@ -47,8 +40,8 @@ EXPOSE 8080
 #   容器里的变量通过 docker run --env-file .env 或 docker compose 的 env_file 注入。
 #
 #   一个变量都不给也能正常启动：application.yml 里用的是
-#   spring.config.import=optional:file:.env[.properties]，文件缺失时静默跳过，
-#   然后回落到 app.llm.provider 的默认值 mock。
+#   spring.config.import=optional:file:.env[.properties]，文件缺失时静默跳过。
+#   模型凭据本来就不在服务端——由用户在页面上现填，随请求传给后端。
 #
-#   -Dfile.encoding=UTF-8 是必要的：不指定的话容器里的中文报告在部分环境下会乱码。
+#   -Dfile.encoding=UTF-8 是必要的：不指定的话容器里的中文在部分环境下会乱码。
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-Dfile.encoding=UTF-8", "-jar", "/app/app.jar"]

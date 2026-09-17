@@ -515,22 +515,30 @@ HTTP 503
 
 ### 容器化
 
+镜像**直接用宿主机打包好的 jar**，不在容器里编译：
+
 ```bash
-# 构建（国内可加 MAVEN_MIRROR 加速）
+# ① 先打包（这一步不能省）
+mvn package -DskipTests
+
+# ② 再构建镜像
 docker build -t csr-hallucination-detection .
 
-# 运行
+# ③ 运行
 docker run -p 8080:8080 csr-hallucination-detection
-
-# 用 .env 注入配置（可选，不传也能起）
-docker run -p 8080:8080 --env-file .env csr-hallucination-detection
-
-# 或者用 compose
-docker compose up
 ```
 
-`.dockerignore` 排除了 `.env` 与 `target/`——密钥不会进镜像，
-构建在容器内的多阶段流程里从源码完成。
+**为什么不在镜像里编译。** 容器内跑 Maven 每次都要重下一遍依赖——构建慢、镜像层大，
+而本地已经构建过一次了。代价是②之前必须先①，忘了会看到
+`failed to compute cache key: "/target/xxx.jar": not found`。
+
+对应的 `.dockerignore` 用 `target/*` 加 `!target/*.jar`：**只放行 jar**，
+classes、测试报告这些不进构建上下文——否则每次 `docker build` 都要把几百 MB
+传给 Docker 守护进程。
+
+`Dockerfile` 里用的是 `target/*.jar` 而不是写死版本号，pom 改版本时不用跟着改。
+Spring Boot 的 `repackage` 会在 target 下留一个 `xxx.jar.original`，
+但它不以 `.jar` 结尾，不会被匹配到。
 
 ---
 

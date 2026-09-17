@@ -1,0 +1,6 @@
+# 替换成你的实际域名
+detection.wudike.online {
+    tls /opt/cf/cert.pem /opt/cf/key.pem
+    # 反向代理到 Xboard 容器
+    reverse_proxy detector:8080
+}
