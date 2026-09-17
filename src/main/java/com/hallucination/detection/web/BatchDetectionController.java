@@ -25,7 +25,7 @@ import java.util.Map;
  * {
  *   "base_url": "https://api.deepseek.com/v1",
  *   "api_key":  "sk-...",
- *   "model":    "deepseek-chat",
+ *   "model":    "deepseek-v4-pro",
  *   "replies":      [ { "id", "user_question", "system_reply", "knowledge_base" } ],
  *   "ground_truth": [ { "id", "is_hallucination", "hallucination_type", "detail" } ]   // 可选
  * }

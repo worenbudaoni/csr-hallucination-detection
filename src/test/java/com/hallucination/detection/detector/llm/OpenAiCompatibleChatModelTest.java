@@ -130,12 +130,12 @@ class OpenAiCompatibleChatModelTest {
     @Test
     void describeNeverLeaksTheApiKey() {
         OpenAiCompatibleChatModel model =
-                new OpenAiCompatibleChatModel("https://api.deepseek.com/v1", "sk-super-secret", "deepseek-chat");
+                new OpenAiCompatibleChatModel("https://api.deepseek.com/v1", "sk-super-secret", "deepseek-v4-pro");
 
         Map<String, String> info = model.describe();
 
         assertEquals("https://api.deepseek.com/v1/chat/completions", info.get("endpoint"));
-        assertEquals("deepseek-chat", info.get("model"));
+        assertEquals("deepseek-v4-pro", info.get("model"));
         assertEquals("true", info.get("apiKeyConfigured"));
         for (String value : info.values()) {
             assertFalse(value.contains("sk-super-secret"), "回报里泄露了密钥：" + value);

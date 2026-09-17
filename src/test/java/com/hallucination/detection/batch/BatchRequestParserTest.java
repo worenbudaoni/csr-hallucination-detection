@@ -35,7 +35,7 @@ class BatchRequestParserTest {
                 {
                   "base_url": "https://api.deepseek.com/v1",
                   "api_key": "sk-test",
-                  "model": "deepseek-chat",
+                  "model": "deepseek-v4-pro",
                   "replies": [%s]
                   %s
                 }
@@ -53,7 +53,7 @@ class BatchRequestParserTest {
         assertTrue(parsed.ok(), String.join("; ", parsed.errors()));
         BatchDetectionRequest request = parsed.request();
         assertEquals("https://api.deepseek.com/v1", request.baseUrl());
-        assertEquals("deepseek-chat", request.model());
+        assertEquals("deepseek-v4-pro", request.model());
         assertEquals(1, request.replies().size());
         assertEquals("a", request.replies().get(0).id());
         assertFalse(request.hasGroundTruth(), "没给标注时应当为空");
@@ -424,12 +424,12 @@ class BatchRequestParserTest {
     void connectionParsingDoesNotRequireReplies() {
         BatchRequestParser.ParsedConnection parsed = BatchRequestParser.parseConnection(
                 MAPPER.readTree("""
-                        {"base_url":"https://api.deepseek.com/v1","api_key":"sk","model":"deepseek-chat"}
+                        {"base_url":"https://api.deepseek.com/v1","api_key":"sk","model":"deepseek-v4-pro"}
                         """));
 
         assertTrue(parsed.ok(), String.join("; ", parsed.errors()));
         assertEquals("https://api.deepseek.com/v1", parsed.settings().baseUrl());
-        assertEquals("deepseek-chat", parsed.settings().model());
+        assertEquals("deepseek-v4-pro", parsed.settings().model());
     }
 
     /** 连接信息的校验规则与批量检测完全一致——两处各写一套迟早会分叉。 */

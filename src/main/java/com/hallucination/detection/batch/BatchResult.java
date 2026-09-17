@@ -9,7 +9,7 @@ import java.util.Map;
 /**
  * 一次批量检测的结果。
  *
- * @param engine               产出结论的模型，形如 {@code deepseek-chat @ https://api.deepseek.com/v1}
+ * @param engine               产出结论的模型，形如 {@code deepseek-v4-pro @ https://api.deepseek.com/v1}
  * @param total                参与检测的条数
  * @param detected             判为幻觉的条数
  * @param clean                判为干净的条数

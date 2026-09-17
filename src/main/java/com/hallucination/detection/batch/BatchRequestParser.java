@@ -61,7 +61,7 @@ public final class BatchRequestParser {
 
         validateBaseUrl(baseUrl, errors, warnings);
         if (isBlank(model)) {
-            errors.add("缺少 model：需要与所选厂商匹配的模型名，例如 deepseek-chat / qwen-plus / gpt-4o-mini。");
+            errors.add("缺少 model：需要与所选厂商匹配的模型名，例如 deepseek-v4-pro / qwen-plus / gpt-4o-mini。");
         }
         validateApiKey(apiKey, baseUrl, errors, warnings);
 

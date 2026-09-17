@@ -359,7 +359,7 @@ HTTP 503
 页面上的「测试连接」用它，请求体只要连接信息：
 
 ```json
-{"base_url": "https://api.deepseek.com/v1", "api_key": "sk-...", "model": "deepseek-chat"}
+{"base_url": "https://api.deepseek.com/v1", "api_key": "sk-...", "model": "deepseek-v4-pro"}
 ```
 
 探测走的客户端与正式检测**完全一致**，所以它报出来的错就是检测时会遇到的错：
@@ -383,7 +383,7 @@ HTTP 503
 {
   "base_url": "https://api.deepseek.com/v1",
   "api_key":  "sk-...",
-  "model":    "deepseek-chat",
+  "model":    "deepseek-v4-pro",
   "replies": [
     {
       "id": "case-1",
@@ -405,7 +405,7 @@ HTTP 503
 {
   "warnings": [],
   "data": {
-    "engine": "deepseek-chat @ https://api.deepseek.com/v1",
+    "engine": "deepseek-v4-pro @ https://api.deepseek.com/v1",
     "total": 1, "detected": 1, "clean": 0,
     "type_distribution": {"政策规则编造": 1},
     "severity_distribution": {"S2": 1},
@@ -482,7 +482,7 @@ HTTP 503
 | 厂商 | base-url | 模型名示例 |
 |---|---|---|
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
-| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-v4-pro` |
 | 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
 | 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` |
 | Kimi | `https://api.moonshot.cn/v1` | `moonshot-v1-8k` |
